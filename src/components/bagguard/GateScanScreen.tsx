@@ -3,10 +3,19 @@
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { ScanLine, ShieldCheck, Camera, X } from "lucide-react";
+import { BrowserMultiFormatReader, type IScannerControls } from "@zxing/browser";
 import { AppShell } from "@/components/bagguard/AppShell";
 import { LookupForm } from "@/components/bagguard/LookupForm";
 import { getCurrentProfile, verifyAtGate } from "@/lib/data-service";
 import type { VerificationResult } from "@/lib/bagguard-types";
+
+function isMobileDevice(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return (
+    /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
+    (navigator.maxTouchPoints > 1 && window.matchMedia("(pointer: coarse)").matches)
+  );
+}
 
 export function GateScanScreen() {
   const router = useRouter();
@@ -20,8 +29,10 @@ export function GateScanScreen() {
   const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const controlsRef = useRef<IScannerControls | null>(null);
+  const scanningRef = useRef(false); // prevent multiple simultaneous scans
 
-  // Result from data-service
+  // Result
   const [scanResult, setScanResult] = useState<VerificationResult | null>(null);
   const [scanLoading, setScanLoading] = useState(false);
 
@@ -45,19 +56,28 @@ export function GateScanScreen() {
       .finally(() => setChecking(false));
   }, [router]);
 
-  // Camera start / stop
+  // Camera + barcode scanner
   useEffect(() => {
     if (!scannerOpen) {
+      // Stop everything
+      if (controlsRef.current) {
+        controlsRef.current.stop();
+        controlsRef.current = null;
+      }
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
       }
       setCameraError(null);
+      scanningRef.current = false;
       return;
     }
 
-    async function startCamera() {
+    let cancelled = false;
+
+    async function startCameraAndScanner() {
       setCameraError(null);
+      scanningRef.current = false;
 
       if (!window.isSecureContext) {
         setCameraError("Camera only works on HTTPS or localhost.");
@@ -69,46 +89,95 @@ export function GateScanScreen() {
         return;
       }
 
-      const constraintsList: MediaStreamConstraints[] = [
-        { video: { facingMode: "user" }, audio: false },
-        { video: true, audio: false },
-        { video: { facingMode: "environment" }, audio: false },
-      ];
+      const mobile = isMobileDevice();
+
+      // Prefer back camera on phones, front camera on laptops
+      const constraintsList: MediaStreamConstraints[] = mobile
+        ? [
+            { video: { facingMode: { exact: "environment" } }, audio: false },
+            { video: { facingMode: "environment" }, audio: false },
+            { video: true, audio: false },
+            { video: { facingMode: "user" }, audio: false },
+          ]
+        : [
+            { video: { facingMode: "user" }, audio: false },
+            { video: true, audio: false },
+            { video: { facingMode: "environment" }, audio: false },
+          ];
 
       let lastError: unknown = null;
+      let stream: MediaStream | null = null;
 
       for (const constraints of constraintsList) {
         try {
-          const stream = await navigator.mediaDevices.getUserMedia(constraints);
-          streamRef.current = stream;
-
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-            await videoRef.current.play().catch(() => {});
-          }
-          return;
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+          break;
         } catch (err) {
           lastError = err;
         }
       }
 
-      let message = "Could not open the camera.";
-      if (lastError instanceof DOMException) {
-        if (lastError.name === "NotAllowedError") {
-          message =
-            "Camera permission was denied. Please allow camera access in the browser address bar and try again.";
-        } else if (lastError.name === "NotFoundError") {
-          message = "No camera was found on this device.";
-        } else {
-          message = `Camera error: ${lastError.message}`;
+      if (!stream) {
+        let message = "Could not open the camera.";
+        if (lastError instanceof DOMException) {
+          if (lastError.name === "NotAllowedError") {
+            message =
+              "Camera permission was denied. Please allow camera access in the browser address bar and try again.";
+          } else if (lastError.name === "NotFoundError") {
+            message = "No camera was found on this device.";
+          } else {
+            message = `Camera error: ${lastError.message}`;
+          }
         }
+        setCameraError(message);
+        return;
       }
-      setCameraError(message);
+
+      if (cancelled) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+
+      streamRef.current = stream;
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(() => {});
+      }
+
+      // Start continuous barcode reading
+      try {
+        const reader = new BrowserMultiFormatReader();
+        const controls = await reader.decodeFromVideoElement(
+          videoRef.current!,
+          (result, error, controls) => {
+            if (result && !scanningRef.current) {
+              scanningRef.current = true;
+              const text = result.getText().trim();
+              if (text) {
+                // Stop the scanner immediately so it doesn’t fire multiple times
+                controls.stop();
+                controlsRef.current = null;
+                handleScan(text);
+              }
+            }
+          }
+        );
+        controlsRef.current = controls;
+      } catch (err) {
+        console.error("Barcode scanner failed to start:", err);
+        // Camera still works – user can type the USN manually
+      }
     }
 
-    startCamera();
+    startCameraAndScanner();
 
     return () => {
+      cancelled = true;
+      if (controlsRef.current) {
+        controlsRef.current.stop();
+        controlsRef.current = null;
+      }
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
@@ -116,7 +185,6 @@ export function GateScanScreen() {
     };
   }, [scannerOpen]);
 
-  // Use the existing data-service function (Supabase + scan logging)
   async function handleScan(usn: string) {
     if (!usn.trim()) return;
 
@@ -230,8 +298,13 @@ export function GateScanScreen() {
                         muted
                         className="h-full w-full object-cover"
                       />
+                      {/* Scanning guide box */}
                       <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                         <div className="h-40 w-64 rounded-lg border-2 border-secondary/80 shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" />
+                      </div>
+                      {/* Hint text */}
+                      <div className="pointer-events-none absolute bottom-3 left-0 right-0 text-center text-xs text-white/90">
+                        Align the barcode inside the box
                       </div>
                     </>
                   )}
@@ -239,7 +312,7 @@ export function GateScanScreen() {
 
                 <div className="space-y-3 p-4">
                   <p className="text-center text-xs text-muted-foreground">
-                    Point the camera at the barcode on the student ID.
+                    Point the camera at the barcode. It will scan automatically.
                   </p>
                   <div className="flex gap-2">
                     <input
