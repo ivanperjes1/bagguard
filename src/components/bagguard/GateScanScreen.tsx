@@ -3,16 +3,14 @@
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { ScanLine, ShieldCheck, Camera, X } from "lucide-react";
-
 import { AppShell } from "@/components/bagguard/AppShell";
 import { LookupForm } from "@/components/bagguard/LookupForm";
-import { getCurrentProfile } from "@/lib/data-service";
-
-// Uses environment variable so it works on both localhost and Vercel
-const API_BASE = process.env.NEXT_PUBLIC_SCAN_API_URL || "http://localhost:5000";
+import { getCurrentProfile, verifyAtGate } from "@/lib/data-service";
+import type { VerificationResult } from "@/lib/bagguard-types";
 
 export function GateScanScreen() {
   const router = useRouter();
+
   const [allowed, setAllowed] = useState(false);
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -23,8 +21,8 @@ export function GateScanScreen() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // Result from Flask
-  const [scanResult, setScanResult] = useState<any>(null);
+  // Result from data-service
+  const [scanResult, setScanResult] = useState<VerificationResult | null>(null);
   const [scanLoading, setScanLoading] = useState(false);
 
   // Staff access check
@@ -118,7 +116,7 @@ export function GateScanScreen() {
     };
   }, [scannerOpen]);
 
-  // Call Flask API
+  // Use the existing data-service function (Supabase + scan logging)
   async function handleScan(usn: string) {
     if (!usn.trim()) return;
 
@@ -126,26 +124,27 @@ export function GateScanScreen() {
     setScanResult(null);
 
     try {
-      const res = await fetch(`${API_BASE}/api/scan`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ usn: usn.trim() }),
+      const result = await verifyAtGate({
+        usn: usn.trim(),
+        checkpointName: "Checkpoint 01",
       });
-
-      const data = await res.json();
-      setScanResult(data);
+      setScanResult(result);
     } catch (err) {
       setScanResult({
-        success: false,
-        error: "Could not reach the scan server. Check if the Flask backend is running and NEXT_PUBLIC_SCAN_API_URL is set correctly.",
+        status: "error",
+        registration: null,
+        message:
+          err instanceof Error
+            ? err.message
+            : "Lookup failed. Please try again.",
       });
     } finally {
       setScanLoading(false);
       setScannerOpen(false);
     }
   }
+
+  const isAuthorized = scanResult?.status === "authorized";
 
   return (
     <AppShell active="/scan" staff>
@@ -190,7 +189,7 @@ export function GateScanScreen() {
             </button>
           </div>
 
-          {/* Scanner Modal – original design kept */}
+          {/* Scanner Modal */}
           {scannerOpen && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
               <div className="relative w-full max-w-md overflow-hidden rounded-xl bg-background shadow-2xl">
@@ -242,7 +241,6 @@ export function GateScanScreen() {
                   <p className="text-center text-xs text-muted-foreground">
                     Point the camera at the barcode on the student ID.
                   </p>
-
                   <div className="flex gap-2">
                     <input
                       type="text"
@@ -282,26 +280,46 @@ export function GateScanScreen() {
           {scanResult && (
             <div
               className={`mb-6 rounded-lg border px-4 py-3 text-sm ${
-                scanResult.success
+                isAuthorized
                   ? "border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400"
                   : "border-destructive/40 bg-destructive/10 text-destructive"
               }`}
             >
-              {scanResult.success ? (
+              {isAuthorized && scanResult.registration ? (
                 <div>
-                  <p className="font-semibold">✓ Registered bag found</p>
+                  <p className="font-semibold">✓ Authorized — registered bag found</p>
                   <p className="mt-1">
-                    {scanResult.student.student_name} · {scanResult.student.usn} ·{" "}
-                    {scanResult.student.department}
+                    {scanResult.registration.studentName} · {scanResult.registration.usn} ·{" "}
+                    {scanResult.registration.department}
                   </p>
-                  {scanResult.student.bag_description && (
+                  {scanResult.registration.bagDescription && (
                     <p className="mt-1 text-xs opacity-80">
-                      {scanResult.student.bag_description}
+                      {scanResult.registration.bagDescription}
                     </p>
                   )}
                 </div>
               ) : (
-                <p>{scanResult.error}</p>
+                <div>
+                  <p className="font-semibold">
+                    {scanResult.status === "unregistered"
+                      ? "✗ Not registered"
+                      : scanResult.status === "pending_approval"
+                        ? "⏳ Pending approval"
+                        : scanResult.status === "rejected"
+                          ? "✗ Registration rejected"
+                          : scanResult.status === "revoked"
+                            ? "✗ Access revoked"
+                            : scanResult.status === "inactive"
+                              ? "✗ Inactive"
+                              : "✗ Check failed"}
+                  </p>
+                  <p className="mt-1">{scanResult.message}</p>
+                  {scanResult.registration && (
+                    <p className="mt-1 text-xs opacity-80">
+                      {scanResult.registration.studentName} · {scanResult.registration.usn}
+                    </p>
+                  )}
+                </div>
               )}
             </div>
           )}
