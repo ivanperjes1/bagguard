@@ -1,4 +1,3 @@
-
 "use client";
 
 import Image from "next/image";
@@ -11,7 +10,7 @@ import {
   LoaderCircle,
 } from "lucide-react";
 
-import { registerBag } from "@/lib/data-service";
+import { registerBag, lookupBagByUsn } from "@/lib/data-service";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -45,9 +44,7 @@ function fileToDataUrl(file: File): Promise<string> {
           resolve(reader.result);
         } else {
           reject(
-            new Error(
-              "We couldn't read that bag photo. Please try again."
-            )
+            new Error("We couldn't read that bag photo. Please try again.")
           );
         }
       },
@@ -58,9 +55,7 @@ function fileToDataUrl(file: File): Promise<string> {
       "error",
       () =>
         reject(
-          new Error(
-            "We couldn't read that bag photo. Please try again."
-          )
+          new Error("We couldn't read that bag photo. Please try again.")
         ),
       { once: true }
     );
@@ -76,9 +71,7 @@ export function RegistrationForm({
   const [department, setDepartment] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [registrationId, setRegistrationId] = useState<string | null>(
-    null
-  );
+  const [registrationId, setRegistrationId] = useState<string | null>(null);
 
   useEffect(() => {
     return () => {
@@ -115,9 +108,7 @@ export function RegistrationForm({
     });
   }
 
-  async function submitRegistration(
-    event: FormEvent<HTMLFormElement>
-  ) {
+  async function submitRegistration(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (submitting) return;
@@ -130,14 +121,10 @@ export function RegistrationForm({
     const formData = new FormData(form);
 
     try {
-      const studentName = String(
-        formData.get("studentName") ?? ""
-      ).trim();
-
+      const studentName = String(formData.get("studentName") ?? "").trim();
       const usn = String(formData.get("usn") ?? "")
         .trim()
         .toUpperCase();
-
       const bagDescription = String(
         formData.get("bagDescription") ?? ""
       ).trim();
@@ -150,21 +137,44 @@ export function RegistrationForm({
         throw new Error("Please enter a valid student ID or USN.");
       }
 
-      if (
-        !departments.some((item) => item === department)
-      ) {
+      if (!departments.some((item) => item === department)) {
         throw new Error("Please select your department.");
       }
 
       if (bagDescription.length < 5) {
+        throw new Error("Please provide a more detailed bag description.");
+      }
+
+      // Pre-check: block if this USN already has a non-archived registration
+      const existing = await lookupBagByUsn(usn);
+      if (existing.registration) {
+        const status = existing.registration.status;
+
+        if (status === "pending") {
+          throw new Error(
+            "This student number already has a registration waiting for approval. Please wait for staff to review it."
+          );
+        }
+
+        if (status === "approved") {
+          throw new Error(
+            "This student number already has an approved bag registration. Contact campus staff if you need to update it."
+          );
+        }
+
+        if (status === "rejected" || status === "revoked" || status === "inactive") {
+          throw new Error(
+            "This student number already has a registration on file. Contact campus staff if you need to register again."
+          );
+        }
+
+        // Any other non-archived status
         throw new Error(
-          "Please provide a more detailed bag description."
+          "This student number already has a registration. Contact campus staff if the bag needs to change."
         );
       }
 
-      const imageUrl = photo
-        ? await fileToDataUrl(photo.file)
-        : null;
+      const imageUrl = photo ? await fileToDataUrl(photo.file) : null;
 
       const result = await registerBag({
         studentName,
@@ -188,7 +198,6 @@ export function RegistrationForm({
       const fileInput = form.querySelector<HTMLInputElement>(
         'input[name="bagPhoto"]'
       );
-
       if (fileInput) {
         fileInput.value = "";
       }
@@ -217,20 +226,16 @@ export function RegistrationForm({
             className="mt-0.5 shrink-0 text-chart-2"
             size={19}
           />
-
           <div className="min-w-0">
             <p className="font-semibold text-foreground">
               Registration received
             </p>
-
             <p className="mt-1 text-muted-foreground">
               Your request has been submitted. Save this reference:
             </p>
-
             <p className="mt-2 break-all font-mono font-semibold text-foreground">
               {registrationId}
             </p>
-
             <p className="mt-1 text-muted-foreground">
               Your bag registration is awaiting staff approval.
             </p>
@@ -243,10 +248,7 @@ export function RegistrationForm({
           role="alert"
           className="flex items-start gap-3 rounded-xl border border-destructive/25 bg-destructive/10 p-4 text-sm text-destructive"
         >
-          <AlertCircle
-            className="mt-0.5 shrink-0"
-            size={18}
-          />
+          <AlertCircle className="mt-0.5 shrink-0" size={18} />
           <p>{error}</p>
         </div>
       )}
@@ -254,7 +256,6 @@ export function RegistrationForm({
       <div className="grid gap-5 sm:grid-cols-2">
         <label className="space-y-2 text-sm font-semibold">
           <span className="block">Full name</span>
-
           <Input
             name="studentName"
             required
@@ -268,7 +269,6 @@ export function RegistrationForm({
 
         <label className="space-y-2 text-sm font-semibold">
           <span className="block">Student ID / USN</span>
-
           <Input
             name="usn"
             required
@@ -286,10 +286,7 @@ export function RegistrationForm({
         htmlFor="department"
         className="block space-y-2 text-sm font-semibold"
       >
-        <span className="block">
-          Department / classification
-        </span>
-
+        <span className="block">Department / classification</span>
         <select
           id="department"
           name="department"
@@ -305,7 +302,6 @@ export function RegistrationForm({
           <option value="" disabled>
             Select your department
           </option>
-
           {departments.map((item) => (
             <option key={item} value={item}>
               {item}
@@ -317,7 +313,6 @@ export function RegistrationForm({
       {/* Bag description */}
       <label className="block space-y-2 text-sm font-semibold">
         <span className="block">Bag description</span>
-
         <Textarea
           name="bagDescription"
           required
@@ -327,19 +322,15 @@ export function RegistrationForm({
           placeholder="Brand, color, size, distinctive details..."
           className="min-h-28 resize-y rounded-lg bg-background px-3.5 py-3 text-sm font-normal"
         />
-
         <span className="block text-xs font-normal text-muted-foreground">
-          Include the brand, color, size, and details staff can use
-          to identify your bag.
+          Include the brand, color, size, and details staff can use to
+          identify your bag.
         </span>
       </label>
 
       {/* Optional bag photo */}
       <div className="space-y-2">
-        <label
-          htmlFor="bag-photo"
-          className="block text-sm font-semibold"
-        >
+        <label htmlFor="bag-photo" className="block text-sm font-semibold">
           Bag photo{" "}
           <span className="font-normal text-muted-foreground">
             (optional)
@@ -369,10 +360,9 @@ export function RegistrationForm({
             <span className="block truncate text-sm font-semibold">
               {photo?.file.name ?? "Add a clear photo of your bag"}
             </span>
-
             <span className="mt-1 block text-xs leading-5 text-muted-foreground">
-              JPG, PNG, or WebP · maximum 700 KB. Avoid including
-              faces, IDs, or personal documents.
+              JPG, PNG, or WebP · maximum 700 KB. Avoid including faces,
+              IDs, or personal documents.
             </span>
           </span>
 
@@ -387,9 +377,7 @@ export function RegistrationForm({
           type="file"
           accept="image/jpeg,image/png,image/webp"
           className="sr-only"
-          onChange={(event) =>
-            selectPhoto(event.target.files?.[0])
-          }
+          onChange={(event) => selectPhoto(event.target.files?.[0])}
         />
 
         {photo && (
@@ -397,11 +385,9 @@ export function RegistrationForm({
             type="button"
             onClick={() => {
               setPhoto(null);
-
               const input = document.getElementById(
                 "bag-photo"
               ) as HTMLInputElement | null;
-
               if (input) input.value = "";
             }}
             className="text-xs font-medium text-destructive hover:underline"
@@ -414,9 +400,9 @@ export function RegistrationForm({
       {/* Submit */}
       <div className="flex flex-col gap-4 border-t border-border pt-5 sm:flex-row sm:items-center sm:justify-between">
         <p className="max-w-md text-xs leading-5 text-muted-foreground">
-          By submitting, you confirm that the information describes
-          the bag you intend to bring to campus. AMA Lipa staff will
-          review your registration.
+          By submitting, you confirm that the information describes the bag
+          you intend to bring to campus. AMA Lipa staff will review your
+          registration.
         </p>
 
         <Button
@@ -426,17 +412,11 @@ export function RegistrationForm({
           className="min-h-12 shrink-0 rounded-lg px-5 text-sm font-semibold"
         >
           {submitting ? (
-            <LoaderCircle
-              className="animate-spin"
-              size={17}
-            />
+            <LoaderCircle className="animate-spin" size={17} />
           ) : (
             <ArrowRight size={16} />
           )}
-
-          {submitting
-            ? "Submitting..."
-            : "Submit for review"}
+          {submitting ? "Submitting..." : "Submit for review"}
         </Button>
       </div>
     </form>
