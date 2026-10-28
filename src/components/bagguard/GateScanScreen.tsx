@@ -30,7 +30,7 @@ export function GateScanScreen() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const controlsRef = useRef<IScannerControls | null>(null);
-  const scanningRef = useRef(false); // prevent multiple simultaneous scans
+  const scanningRef = useRef(false);
 
   // Result
   const [scanResult, setScanResult] = useState<VerificationResult | null>(null);
@@ -59,7 +59,6 @@ export function GateScanScreen() {
   // Camera + barcode scanner
   useEffect(() => {
     if (!scannerOpen) {
-      // Stop everything
       if (controlsRef.current) {
         controlsRef.current.stop();
         controlsRef.current = null;
@@ -150,12 +149,11 @@ export function GateScanScreen() {
         const reader = new BrowserMultiFormatReader();
         const controls = await reader.decodeFromVideoElement(
           videoRef.current!,
-          (result, error, controls) => {
+          (result, _error, controls) => {
             if (result && !scanningRef.current) {
               scanningRef.current = true;
               const text = result.getText().trim();
               if (text) {
-                // Stop the scanner immediately so it doesn’t fire multiple times
                 controls.stop();
                 controlsRef.current = null;
                 handleScan(text);
@@ -166,7 +164,6 @@ export function GateScanScreen() {
         controlsRef.current = controls;
       } catch (err) {
         console.error("Barcode scanner failed to start:", err);
-        // Camera still works – user can type the USN manually
       }
     }
 
@@ -298,11 +295,9 @@ export function GateScanScreen() {
                         muted
                         className="h-full w-full object-cover"
                       />
-                      {/* Scanning guide box */}
                       <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                         <div className="h-40 w-64 rounded-lg border-2 border-secondary/80 shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" />
                       </div>
-                      {/* Hint text */}
                       <div className="pointer-events-none absolute bottom-3 left-0 right-0 text-center text-xs text-white/90">
                         Align the barcode inside the box
                       </div>
@@ -349,51 +344,87 @@ export function GateScanScreen() {
             </div>
           )}
 
-          {/* Scan Result */}
+          {/* Scan Result – name, image, USN, department, description */}
           {scanResult && (
             <div
-              className={`mb-6 rounded-lg border px-4 py-3 text-sm ${
+              className={`mb-6 overflow-hidden rounded-xl border ${
                 isAuthorized
-                  ? "border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400"
-                  : "border-destructive/40 bg-destructive/10 text-destructive"
+                  ? "border-green-500/40 bg-green-500/5"
+                  : "border-destructive/40 bg-destructive/5"
               }`}
             >
-              {isAuthorized && scanResult.registration ? (
-                <div>
-                  <p className="font-semibold">✓ Authorized — registered bag found</p>
-                  <p className="mt-1">
-                    {scanResult.registration.studentName} · {scanResult.registration.usn} ·{" "}
-                    {scanResult.registration.department}
-                  </p>
-                  {scanResult.registration.bagDescription && (
-                    <p className="mt-1 text-xs opacity-80">
-                      {scanResult.registration.bagDescription}
-                    </p>
-                  )}
-                </div>
-              ) : (
-                <div>
-                  <p className="font-semibold">
-                    {scanResult.status === "unregistered"
-                      ? "✗ Not registered"
-                      : scanResult.status === "pending_approval"
-                        ? "⏳ Pending approval"
-                        : scanResult.status === "rejected"
-                          ? "✗ Registration rejected"
-                          : scanResult.status === "revoked"
-                            ? "✗ Access revoked"
-                            : scanResult.status === "inactive"
-                              ? "✗ Inactive"
-                              : "✗ Check failed"}
-                  </p>
-                  <p className="mt-1">{scanResult.message}</p>
-                  {scanResult.registration && (
-                    <p className="mt-1 text-xs opacity-80">
-                      {scanResult.registration.studentName} · {scanResult.registration.usn}
-                    </p>
-                  )}
-                </div>
-              )}
+              {/* Status header */}
+              <div
+                className={`flex items-center gap-2 px-4 py-3 text-sm font-semibold ${
+                  isAuthorized
+                    ? "bg-green-500/10 text-green-700 dark:text-green-400"
+                    : "bg-destructive/10 text-destructive"
+                }`}
+              >
+                {isAuthorized ? (
+                  <>✓ Authorized — ready for verification</>
+                ) : scanResult.status === "unregistered" ? (
+                  <>✗ Not registered</>
+                ) : scanResult.status === "pending_approval" ? (
+                  <>⏳ Pending approval</>
+                ) : scanResult.status === "rejected" ? (
+                  <>✗ Registration rejected</>
+                ) : scanResult.status === "revoked" ? (
+                  <>✗ Access revoked</>
+                ) : scanResult.status === "inactive" ? (
+                  <>✗ Inactive</>
+                ) : (
+                  <>✗ Check failed</>
+                )}
+              </div>
+
+              {/* Body */}
+              <div className="p-4">
+                {scanResult.registration ? (
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+                    {/* Bag photo */}
+                    {scanResult.registration.imageUrl ? (
+                      <div className="shrink-0 overflow-hidden rounded-lg border bg-muted">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={scanResult.registration.imageUrl}
+                          alt="Registered bag"
+                          className="h-28 w-36 object-cover sm:h-32 sm:w-40"
+                        />
+                      </div>
+                    ) : (
+                      <div className="flex h-28 w-36 shrink-0 items-center justify-center rounded-lg border border-dashed bg-muted/50 text-xs text-muted-foreground sm:h-32 sm:w-40">
+                        No photo
+                      </div>
+                    )}
+
+                    {/* Details */}
+                    <div className="min-w-0 flex-1 space-y-1.5 text-sm">
+                      <p className="text-base font-semibold text-foreground">
+                        {scanResult.registration.studentName}
+                      </p>
+                      <p className="font-mono text-sm text-muted-foreground">
+                        {scanResult.registration.usn}
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        {scanResult.registration.department}
+                      </p>
+                      {scanResult.registration.bagDescription && (
+                        <p className="mt-2 text-sm leading-5 text-foreground/90">
+                          {scanResult.registration.bagDescription}
+                        </p>
+                      )}
+                      {!isAuthorized && (
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          {scanResult.message}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">{scanResult.message}</p>
+                )}
+              </div>
             </div>
           )}
 
