@@ -6,8 +6,7 @@ import { ScanLine, ShieldCheck, Camera, X } from "lucide-react";
 import { BrowserMultiFormatReader, type IScannerControls } from "@zxing/browser";
 import { AppShell } from "@/components/bagguard/AppShell";
 import { LookupForm } from "@/components/bagguard/LookupForm";
-import { getCurrentProfile, verifyAtGate } from "@/lib/data-service";
-import type { VerificationResult } from "@/lib/bagguard-types";
+import { getCurrentProfile } from "@/lib/data-service";
 
 function isMobileDevice(): boolean {
   if (typeof navigator === "undefined") return false;
@@ -32,9 +31,8 @@ export function GateScanScreen() {
   const controlsRef = useRef<IScannerControls | null>(null);
   const scanningRef = useRef(false);
 
-  // Result
-  const [scanResult, setScanResult] = useState<VerificationResult | null>(null);
-  const [scanLoading, setScanLoading] = useState(false);
+  // USN from camera → fed into LookupForm
+  const [scannedUsn, setScannedUsn] = useState<string | null>(null);
 
   // Staff access check
   useEffect(() => {
@@ -90,7 +88,6 @@ export function GateScanScreen() {
 
       const mobile = isMobileDevice();
 
-      // Prefer back camera on phones, front camera on laptops
       const constraintsList: MediaStreamConstraints[] = mobile
         ? [
             { video: { facingMode: { exact: "environment" } }, audio: false },
@@ -144,7 +141,6 @@ export function GateScanScreen() {
         await videoRef.current.play().catch(() => {});
       }
 
-      // Start continuous barcode reading
       try {
         const reader = new BrowserMultiFormatReader();
         const controls = await reader.decodeFromVideoElement(
@@ -156,7 +152,9 @@ export function GateScanScreen() {
               if (text) {
                 controls.stop();
                 controlsRef.current = null;
-                handleScan(text);
+                // Close modal and hand USN to LookupForm
+                setScannerOpen(false);
+                setScannedUsn(text);
               }
             }
           }
@@ -182,34 +180,13 @@ export function GateScanScreen() {
     };
   }, [scannerOpen]);
 
-  async function handleScan(usn: string) {
-    if (!usn.trim()) return;
-
-    setScanLoading(true);
-    setScanResult(null);
-
-    try {
-      const result = await verifyAtGate({
-        usn: usn.trim(),
-        checkpointName: "Checkpoint 01",
-      });
-      setScanResult(result);
-    } catch (err) {
-      setScanResult({
-        status: "error",
-        registration: null,
-        message:
-          err instanceof Error
-            ? err.message
-            : "Lookup failed. Please try again.",
-      });
-    } finally {
-      setScanLoading(false);
-      setScannerOpen(false);
-    }
+  // Manual type-in from the scanner modal
+  function handleManualScan(value: string) {
+    const text = value.trim();
+    if (!text) return;
+    setScannerOpen(false);
+    setScannedUsn(text);
   }
-
-  const isAuthorized = scanResult?.status === "authorized";
 
   return (
     <AppShell active="/scan" staff>
@@ -317,10 +294,7 @@ export function GateScanScreen() {
                       autoFocus
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
-                          const value = (e.target as HTMLInputElement).value.trim();
-                          if (value) {
-                            handleScan(value);
-                          }
+                          handleManualScan((e.target as HTMLInputElement).value);
                         }
                       }}
                     />
@@ -337,99 +311,12 @@ export function GateScanScreen() {
             </div>
           )}
 
-          {/* Loading */}
-          {scanLoading && (
-            <div className="mb-6 rounded-lg border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-              Looking up bag registration…
-            </div>
-          )}
-
-          {/* Scan Result – name, image, USN, department, description */}
-          {scanResult && (
-            <div
-              className={`mb-6 overflow-hidden rounded-xl border ${
-                isAuthorized
-                  ? "border-green-500/40 bg-green-500/5"
-                  : "border-destructive/40 bg-destructive/5"
-              }`}
-            >
-              {/* Status header */}
-              <div
-                className={`flex items-center gap-2 px-4 py-3 text-sm font-semibold ${
-                  isAuthorized
-                    ? "bg-green-500/10 text-green-700 dark:text-green-400"
-                    : "bg-destructive/10 text-destructive"
-                }`}
-              >
-                {isAuthorized ? (
-                  <>✓ Authorized — ready for verification</>
-                ) : scanResult.status === "unregistered" ? (
-                  <>✗ Not registered</>
-                ) : scanResult.status === "pending_approval" ? (
-                  <>⏳ Pending approval</>
-                ) : scanResult.status === "rejected" ? (
-                  <>✗ Registration rejected</>
-                ) : scanResult.status === "revoked" ? (
-                  <>✗ Access revoked</>
-                ) : scanResult.status === "inactive" ? (
-                  <>✗ Inactive</>
-                ) : (
-                  <>✗ Check failed</>
-                )}
-              </div>
-
-              {/* Body */}
-              <div className="p-4">
-                {scanResult.registration ? (
-                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
-                    {/* Bag photo */}
-                    {scanResult.registration.imageUrl ? (
-                      <div className="shrink-0 overflow-hidden rounded-lg border bg-muted">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={scanResult.registration.imageUrl}
-                          alt="Registered bag"
-                          className="h-28 w-36 object-cover sm:h-32 sm:w-40"
-                        />
-                      </div>
-                    ) : (
-                      <div className="flex h-28 w-36 shrink-0 items-center justify-center rounded-lg border border-dashed bg-muted/50 text-xs text-muted-foreground sm:h-32 sm:w-40">
-                        No photo
-                      </div>
-                    )}
-
-                    {/* Details */}
-                    <div className="min-w-0 flex-1 space-y-1.5 text-sm">
-                      <p className="text-base font-semibold text-foreground">
-                        {scanResult.registration.studentName}
-                      </p>
-                      <p className="font-mono text-sm text-muted-foreground">
-                        {scanResult.registration.usn}
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        {scanResult.registration.department}
-                      </p>
-                      {scanResult.registration.bagDescription && (
-                        <p className="mt-2 text-sm leading-5 text-foreground/90">
-                          {scanResult.registration.bagDescription}
-                        </p>
-                      )}
-                      {!isAuthorized && (
-                        <p className="mt-2 text-xs text-muted-foreground">
-                          {scanResult.message}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">{scanResult.message}</p>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Existing Lookup Form */}
-          <LookupForm mode="gate" />
+          {/* LookupForm – result appears in the “Ready for verification” panel */}
+          <LookupForm
+            mode="gate"
+            scannedUsn={scannedUsn}
+            onScannedUsnConsumed={() => setScannedUsn(null)}
+          />
 
           <p className="mt-5 text-center text-[11px] text-muted-foreground">
             Each completed check is recorded with the selected local operator and checkpoint.

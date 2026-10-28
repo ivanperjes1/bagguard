@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -21,6 +21,10 @@ import type { VerificationResult } from "@/lib/bagguard-types";
 
 interface LookupFormProps {
   mode: "public" | "gate";
+  /** When set (e.g. from barcode scanner), auto-fills and verifies this USN */
+  scannedUsn?: string | null;
+  /** Called after a scanned USN has been consumed so the parent can clear it */
+  onScannedUsnConsumed?: () => void;
 }
 
 const iconByStatus = {
@@ -43,7 +47,11 @@ const resultPanelByStatus: Record<VerificationResult["status"], string> = {
   error: "border-border bg-muted",
 };
 
-export function LookupForm({ mode }: LookupFormProps) {
+export function LookupForm({
+  mode,
+  scannedUsn = null,
+  onScannedUsnConsumed,
+}: LookupFormProps) {
   const [result, setResult] = useState<VerificationResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [usn, setUsn] = useState("");
@@ -51,24 +59,43 @@ export function LookupForm({ mode }: LookupFormProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const isGate = mode === "gate";
 
-  async function checkUsn(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function runCheck(nextUsn: string, nextCheckpoint: string) {
     setLoading(true);
     setResult(null);
     try {
       const next = isGate
-        ? await verifyAtGate({ usn, checkpointName: checkpoint })
-        : await lookupBagByUsn(usn);
+        ? await verifyAtGate({ usn: nextUsn, checkpointName: nextCheckpoint })
+        : await lookupBagByUsn(nextUsn);
       setResult(next);
     } catch (error) {
       setResult({
         status: "error",
         registration: null,
-        message: error instanceof Error ? error.message : "We couldn’t complete that check. Please try again.",
+        message:
+          error instanceof Error
+            ? error.message
+            : "We couldn’t complete that check. Please try again.",
       });
     } finally {
       setLoading(false);
     }
+  }
+
+  // When the camera scanner provides a USN, fill the field and verify
+  useEffect(() => {
+    if (!scannedUsn || !scannedUsn.trim()) return;
+
+    const value = scannedUsn.trim().toUpperCase();
+    setUsn(value);
+    runCheck(value, checkpoint).finally(() => {
+      onScannedUsnConsumed?.();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scannedUsn]);
+
+  async function checkUsn(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await runCheck(usn, checkpoint);
   }
 
   function clearLookup() {
@@ -87,8 +114,14 @@ export function LookupForm({ mode }: LookupFormProps) {
             {isGate ? <ShieldAlert size={20} /> : <Search size={20} />}
           </span>
           <div>
-            <h2 className="text-base font-bold">{isGate ? "Checkpoint lookup" : "Student identification number (USN)"}</h2>
-            <p className="mt-0.5 text-xs text-muted-foreground">{isGate ? "Scan or type the student’s USN" : "Enter the exact USN on the registration"}</p>
+            <h2 className="text-base font-bold">
+              {isGate ? "Checkpoint lookup" : "Student identification number (USN)"}
+            </h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {isGate
+                ? "Scan or type the student’s USN"
+                : "Enter the exact USN on the registration"}
+            </p>
           </div>
         </div>
 
@@ -109,7 +142,9 @@ export function LookupForm({ mode }: LookupFormProps) {
               className="h-14 rounded-lg bg-background px-4 font-mono text-lg font-semibold tracking-wide uppercase outline-none transition-shadow ease-out placeholder:font-sans placeholder:text-sm placeholder:font-normal placeholder:tracking-normal placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring/50"
             />
           </label>
-          <p id="usn-help" className="text-xs text-muted-foreground">Spaces are ignored and letters are matched without case sensitivity.</p>
+          <p id="usn-help" className="text-xs text-muted-foreground">
+            Spaces are ignored and letters are matched without case sensitivity.
+          </p>
 
           {isGate ? (
             <label className="block space-y-2 text-sm font-semibold">
@@ -130,7 +165,11 @@ export function LookupForm({ mode }: LookupFormProps) {
               variant="secondary"
               className="min-h-12 flex-1 rounded-lg px-4 text-sm font-bold transition-colors ease-out"
             >
-              {loading ? <LoaderCircle className="animate-spin" size={17} /> : <ArrowRight size={16} />}
+              {loading ? (
+                <LoaderCircle className="animate-spin" size={17} />
+              ) : (
+                <ArrowRight size={16} />
+              )}
               {loading ? "Checking…" : isGate ? "Verify bag" : "Check registration"}
             </Button>
             {isGate ? (
@@ -149,7 +188,9 @@ export function LookupForm({ mode }: LookupFormProps) {
         </form>
 
         <div className="mt-7 border-t border-border pt-5">
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">{isGate ? "Operator reminder" : "Privacy note"}</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
+            {isGate ? "Operator reminder" : "Privacy note"}
+          </p>
           <p className="mt-2 text-xs leading-5 text-muted-foreground">
             {isGate
               ? "Authorization requires an approved and active registration. A matching USN alone is never enough."
@@ -158,7 +199,11 @@ export function LookupForm({ mode }: LookupFormProps) {
         </div>
       </section>
 
-      <section aria-live="polite" aria-atomic="true" className="min-h-[320px] rounded-xl border border-border bg-card p-5 sm:p-7">
+      <section
+        aria-live="polite"
+        aria-atomic="true"
+        className="min-h-[320px] rounded-xl border border-border bg-card p-5 sm:p-7"
+      >
         {result && ResultIcon ? (
           <div className="space-y-5">
             <div className={`rounded-xl border p-5 ${resultPanelByStatus[result.status]}`}>
@@ -168,33 +213,47 @@ export function LookupForm({ mode }: LookupFormProps) {
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <p className="text-base font-bold">{result.message.split(" — ")[0]}</p>
+                    <p className="text-base font-bold">
+                      {result.message.split(" — ")[0]}
+                    </p>
                     <StatusBadge status={result.status} />
                   </div>
-                  <p className="mt-2 text-sm leading-6 text-muted-foreground">{result.message}</p>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    {result.message}
+                  </p>
                 </div>
               </div>
             </div>
 
             {result.registration ? (
               <div className="rounded-xl border border-border p-5">
-                <p className="mb-4 text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">Registration details</p>
+                <p className="mb-4 text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
+                  Registration details
+                </p>
                 <dl className="grid gap-x-5 gap-y-4 sm:grid-cols-2">
                   <div className="min-w-0">
                     <dt className="text-xs text-muted-foreground">Student name</dt>
-                    <dd className="mt-1 truncate text-sm font-semibold">{result.registration.studentName}</dd>
+                    <dd className="mt-1 truncate text-sm font-semibold">
+                      {result.registration.studentName}
+                    </dd>
                   </div>
                   <div>
                     <dt className="text-xs text-muted-foreground">Student ID / USN</dt>
-                    <dd className="mt-1 font-mono text-sm font-semibold">{result.registration.usn}</dd>
+                    <dd className="mt-1 font-mono text-sm font-semibold">
+                      {result.registration.usn}
+                    </dd>
                   </div>
                   <div>
                     <dt className="text-xs text-muted-foreground">Department</dt>
-                    <dd className="mt-1 text-sm font-semibold">{result.registration.department}</dd>
+                    <dd className="mt-1 text-sm font-semibold">
+                      {result.registration.department}
+                    </dd>
                   </div>
                   <div className="sm:col-span-2">
                     <dt className="text-xs text-muted-foreground">Bag description</dt>
-                    <dd className="mt-1 text-sm leading-6">{result.registration.bagDescription}</dd>
+                    <dd className="mt-1 text-sm leading-6">
+                      {result.registration.bagDescription}
+                    </dd>
                   </div>
                 </dl>
                 {isGate && result.registration.imageUrl ? (
@@ -217,7 +276,9 @@ export function LookupForm({ mode }: LookupFormProps) {
             <span className="grid size-14 place-items-center rounded-2xl bg-muted text-primary">
               {isGate ? <ShieldAlert size={24} /> : <Search size={23} />}
             </span>
-            <h3 className="mt-4 text-base font-bold">{loading ? "Checking the record" : "Ready for verification"}</h3>
+            <h3 className="mt-4 text-base font-bold">
+              {loading ? "Checking the record" : "Ready for verification"}
+            </h3>
             <p className="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">
               {loading
                 ? "BagGuard is comparing this number with the current registration status."
