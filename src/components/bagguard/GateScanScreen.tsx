@@ -8,6 +8,9 @@ import { AppShell } from "@/components/bagguard/AppShell";
 import { LookupForm } from "@/components/bagguard/LookupForm";
 import { getCurrentProfile } from "@/lib/data-service";
 
+// Uses environment variable so it works on both localhost and Vercel
+const API_BASE = process.env.NEXT_PUBLIC_SCAN_API_URL || "http://localhost:5000";
+
 export function GateScanScreen() {
   const router = useRouter();
   const [allowed, setAllowed] = useState(false);
@@ -19,6 +22,10 @@ export function GateScanScreen() {
   const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+
+  // Result from Flask
+  const [scanResult, setScanResult] = useState<any>(null);
+  const [scanLoading, setScanLoading] = useState(false);
 
   // Staff access check
   useEffect(() => {
@@ -64,7 +71,6 @@ export function GateScanScreen() {
         return;
       }
 
-      // Try front camera first (laptops), then any camera, then back camera
       const constraintsList: MediaStreamConstraints[] = [
         { video: { facingMode: "user" }, audio: false },
         { video: true, audio: false },
@@ -82,13 +88,12 @@ export function GateScanScreen() {
             videoRef.current.srcObject = stream;
             await videoRef.current.play().catch(() => {});
           }
-          return; // success
+          return;
         } catch (err) {
           lastError = err;
         }
       }
 
-      // All attempts failed
       let message = "Could not open the camera.";
       if (lastError instanceof DOMException) {
         if (lastError.name === "NotAllowedError") {
@@ -112,6 +117,35 @@ export function GateScanScreen() {
       }
     };
   }, [scannerOpen]);
+
+  // Call Flask API
+  async function handleScan(usn: string) {
+    if (!usn.trim()) return;
+
+    setScanLoading(true);
+    setScanResult(null);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/scan`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ usn: usn.trim() }),
+      });
+
+      const data = await res.json();
+      setScanResult(data);
+    } catch (err) {
+      setScanResult({
+        success: false,
+        error: "Could not reach the scan server. Check if the Flask backend is running and NEXT_PUBLIC_SCAN_API_URL is set correctly.",
+      });
+    } finally {
+      setScanLoading(false);
+      setScannerOpen(false);
+    }
+  }
 
   return (
     <AppShell active="/scan" staff>
@@ -156,11 +190,10 @@ export function GateScanScreen() {
             </button>
           </div>
 
-          {/* Small Scanner Modal */}
+          {/* Scanner Modal – original design kept */}
           {scannerOpen && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
               <div className="relative w-full max-w-md overflow-hidden rounded-xl bg-background shadow-2xl">
-                {/* Header */}
                 <div className="flex items-center justify-between border-b px-4 py-3">
                   <h2 className="text-sm font-semibold">Scan student ID barcode</h2>
                   <button
@@ -173,7 +206,6 @@ export function GateScanScreen() {
                   </button>
                 </div>
 
-                {/* Camera View */}
                 <div className="relative aspect-[4/3] bg-black">
                   {cameraError ? (
                     <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-sm text-white">
@@ -199,7 +231,6 @@ export function GateScanScreen() {
                         muted
                         className="h-full w-full object-cover"
                       />
-                      {/* Scan frame overlay */}
                       <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                         <div className="h-40 w-64 rounded-lg border-2 border-secondary/80 shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" />
                       </div>
@@ -207,7 +238,6 @@ export function GateScanScreen() {
                   )}
                 </div>
 
-                {/* Footer */}
                 <div className="space-y-3 p-4">
                   <p className="text-center text-xs text-muted-foreground">
                     Point the camera at the barcode on the student ID.
@@ -223,9 +253,7 @@ export function GateScanScreen() {
                         if (e.key === "Enter") {
                           const value = (e.target as HTMLInputElement).value.trim();
                           if (value) {
-                            // TODO: pass this value to your LookupForm or lookup function
-                            console.log("Barcode / USN:", value);
-                            setScannerOpen(false);
+                            handleScan(value);
                           }
                         }
                       }}
@@ -243,7 +271,42 @@ export function GateScanScreen() {
             </div>
           )}
 
-          {/* Your existing Lookup Form */}
+          {/* Loading */}
+          {scanLoading && (
+            <div className="mb-6 rounded-lg border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+              Looking up bag registration…
+            </div>
+          )}
+
+          {/* Scan Result */}
+          {scanResult && (
+            <div
+              className={`mb-6 rounded-lg border px-4 py-3 text-sm ${
+                scanResult.success
+                  ? "border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400"
+                  : "border-destructive/40 bg-destructive/10 text-destructive"
+              }`}
+            >
+              {scanResult.success ? (
+                <div>
+                  <p className="font-semibold">✓ Registered bag found</p>
+                  <p className="mt-1">
+                    {scanResult.student.student_name} · {scanResult.student.usn} ·{" "}
+                    {scanResult.student.department}
+                  </p>
+                  {scanResult.student.bag_description && (
+                    <p className="mt-1 text-xs opacity-80">
+                      {scanResult.student.bag_description}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p>{scanResult.error}</p>
+              )}
+            </div>
+          )}
+
+          {/* Existing Lookup Form */}
           <LookupForm mode="gate" />
 
           <p className="mt-5 text-center text-[11px] text-muted-foreground">
