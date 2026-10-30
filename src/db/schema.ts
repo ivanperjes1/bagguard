@@ -242,3 +242,50 @@ export const bagAdminBootstrap = pgTable("bag_admin_bootstrap", {
   }),
   claimedAt: timestamp("claimed_at"),
 });
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+export const notificationTypeEnum = pgEnum("bagguard_notification_type", [
+  "registration_submitted",
+  "registration_approved",
+  "registration_rejected",
+  "registration_requires_correction",
+  "registration_revoked",
+  "registration_deactivated",
+  "registration_reactivated",
+  "lost_or_stolen_reported",
+  "suspicious_bag_reported",
+  "repeated_failed_verification",
+  "system",
+]);
+
+export const bagNotifications = pgTable(
+  "bag_notifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    recipientId: text("recipient_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    message: text("message").notNull(),
+    type: notificationTypeEnum("type").notNull().default("system"),
+    isRead: boolean("is_read").notNull().default(false),
+    relatedRegistrationId: uuid("related_registration_id").references(
+      () => bagRegistrations.id,
+      { onDelete: "set null" },
+    ),
+    metadata: jsonb("metadata").$type<Record<string, string | number | boolean | null>>(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    readAt: timestamp("read_at"),
+  },
+  (table) => [
+    index("bag_notifications_recipient_created_idx").on(
+      table.recipientId,
+      table.createdAt,
+    ),
+    index("bag_notifications_recipient_unread_idx").on(
+      table.recipientId,
+      table.isRead,
+    ),
+  ],
+);
