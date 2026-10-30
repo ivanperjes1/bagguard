@@ -425,7 +425,7 @@ export function LookupForm({
                     </dd>
                   </div>
                 </dl>
-                {isGate && result.registration.imageUrl ? (
+                {result.registration.imageUrl ? (
                   <div className="mt-5 overflow-hidden rounded-lg border border-border">
                     <Image
                       src={result.registration.imageUrl}
