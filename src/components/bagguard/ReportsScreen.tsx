@@ -68,7 +68,7 @@ export function ReportsScreen() {
   return (
     <AppShell active="/report" staff>
       <main className="mx-auto w-full max-w-[1440px] px-4 pb-14 pt-8 sm:px-8 sm:pt-10">
-        <Link href="/admin" className="inline-flex items-center gap-2 text-xs font-semibold text-muted-foreground transition-colors ease-out hover:text-foreground"><ArrowLeft size={14} /> Admin panel</Link>
+        <Link href="/admin" className="inline-flex items-center gap-2 text-xs font-semibold text-white transition-colors ease-out hover:text-foreground"><ArrowLeft size={14} /> Admin panel</Link>
         <div className="mb-7 mt-5 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
             <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-secondary">Staff reports · Records</p>
