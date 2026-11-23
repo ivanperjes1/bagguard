@@ -48,7 +48,7 @@ const actions = [
     tone: "border-l-accent",
   },
   {
-    href: "/report",
+    href: "/issue",
     number: "04",
     label: "Report",
     description:
