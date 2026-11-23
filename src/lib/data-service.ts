@@ -128,6 +128,46 @@ function mapRegistration(row: any): RegistrationRecord {
   };
 }
 
+function mapVisitorBag(row: any): RegistrationRecord {
+  const bagParts = [
+    row.bag_type,
+    row.bag_color,
+    row.bag_brand,
+    row.bag_description,
+  ].filter(Boolean);
+
+  return {
+    id: row.id,
+    studentName: row.visitor_full_name,
+    usn: row.registration_code,
+    department: row.purpose ?? 'Visitor',
+    bagDescription: bagParts.length > 0 ? bagParts.join(' · ') : '—',
+    imageUrl: null,
+    status: row.status,
+    rejectionReason: null,
+    createdAt: row.created_at,
+    approvedAt: row.reviewed_at,
+  };
+}
+
+function statusFromVisitorBag(row: any): ScanStatus {
+  const now = new Date();
+
+  if (row.status === 'approved') {
+    const from = row.valid_from ? new Date(row.valid_from) : null;
+    const until = row.valid_until ? new Date(row.valid_until) : null;
+
+    if (from && now < from) return 'inactive';
+    if (until && now > until) return 'inactive';
+    return 'authorized';
+  }
+
+  if (row.status === 'pending') return 'pending_approval';
+  if (row.status === 'rejected') return 'rejected';
+  if (row.status === 'revoked') return 'revoked';
+  return 'inactive';
+}
+
 function mapScan(row: any): ScanLogRecord {
   return {
     id: row.id,
@@ -372,56 +412,140 @@ export async function registerBag(input: RegisterBagInput): Promise<{ id: string
   return { id: data.id };
 }
 
-export async function lookupBagByUsn(usnInput: string): Promise<VerificationResult> {
-  const usn = normalizeUsn(usnInput);
+// ---------------------------------------------------------------------------
+// Unified lookup – students first, then visitors
+// ---------------------------------------------------------------------------
 
-  const { data } = await getSupabase()
+export async function lookupBagByUsn(usnInput: string): Promise<VerificationResult> {
+  const code = normalizeUsn(usnInput);
+  const supabase = getSupabase();
+
+  // 1. Try student bag registrations
+  const { data: studentReg } = await supabase
     .from('bag_registrations')
     .select('*')
-    .eq('usn', usn)
+    .eq('usn', code)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
 
-  if (!data) {
-    return { status: 'unregistered', registration: null, message: statusMessage('unregistered') };
+  if (studentReg) {
+    const registration = mapRegistration(studentReg);
+    const status = statusFromRegistration(registration.status);
+    return { status, registration, message: statusMessage(status) };
   }
 
-  const registration = mapRegistration(data);
-  const status = statusFromRegistration(registration.status);
-  return { status, registration, message: statusMessage(status) };
+  // 2. Try visitor bags
+  const { data: visitorReg } = await supabase
+    .from('visitor_bags')
+    .select('*')
+    .eq('registration_code', code)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (visitorReg) {
+    const registration = mapVisitorBag(visitorReg);
+    const status = statusFromVisitorBag(visitorReg);
+    return { status, registration, message: statusMessage(status) };
+  }
+
+  // Nothing found
+  return {
+    status: 'unregistered',
+    registration: null,
+    message: statusMessage('unregistered'),
+  };
 }
 
 export async function verifyAtGate(input: VerifyAtGateInput): Promise<VerificationResult> {
-  const usn = normalizeUsn(input.usn);
+  const code = normalizeUsn(input.usn);
   const checkpointName = input.checkpointName.trim().slice(0, 120) || 'Main Gate';
   const operator = await requireRole(true);
+  const supabase = getSupabase();
 
-  const { data: reg } = await getSupabase()
+  // 1. Try student bag registrations
+  const { data: studentReg } = await supabase
     .from('bag_registrations')
     .select('*')
-    .eq('usn', usn)
+    .eq('usn', code)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
 
-  const registration = reg ? mapRegistration(reg) : null;
-  const status = registration ? statusFromRegistration(registration.status) : 'unregistered';
-  const result: VerificationResult = {
-    status,
-    registration,
-    message: statusMessage(status),
-  };
+  if (studentReg) {
+    const registration = mapRegistration(studentReg);
+    const status = statusFromRegistration(registration.status);
 
-  await getSupabase().from('scan_logs').insert({
-    searched_usn: usn,
+    await supabase.from('scan_logs').insert({
+      searched_usn: code,
+      checkpoint_name: checkpointName,
+      operator_name: operator.fullName,
+      status,
+    });
+
+    return {
+      status,
+      registration,
+      message: statusMessage(status),
+    };
+  }
+
+  // 2. Try visitor bags
+  const { data: visitorReg } = await supabase
+    .from('visitor_bags')
+    .select('*')
+    .eq('registration_code', code)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (visitorReg) {
+    const registration = mapVisitorBag(visitorReg);
+    const status = statusFromVisitorBag(visitorReg);
+
+    // Update visitor bag scan counters
+    await supabase
+      .from('visitor_bags')
+      .update({
+        last_scanned_at: nowIso(),
+        scan_count: (visitorReg.scan_count ?? 0) + 1,
+        updated_at: nowIso(),
+      })
+      .eq('id', visitorReg.id);
+
+    await supabase.from('scan_logs').insert({
+      searched_usn: code,
+      checkpoint_name: checkpointName,
+      operator_name: operator.fullName,
+      status,
+    });
+
+    return {
+      status,
+      registration,
+      message: statusMessage(status),
+    };
+  }
+
+  // Nothing found – still log the attempt
+  await supabase.from('scan_logs').insert({
+    searched_usn: code,
     checkpoint_name: checkpointName,
     operator_name: operator.fullName,
-    status,
+    status: 'unregistered',
   });
 
-  return result;
+  return {
+    status: 'unregistered',
+    registration: null,
+    message: statusMessage('unregistered'),
+  };
 }
+
+// ---------------------------------------------------------------------------
+// Admin / reports
+// ---------------------------------------------------------------------------
 
 export async function getAdminDashboardData(): Promise<AdminDashboardData> {
   await requireRole();
