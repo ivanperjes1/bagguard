@@ -1,20 +1,11 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ScanLine, ShieldCheck, Camera, X } from "lucide-react";
-import { BrowserMultiFormatReader, type IScannerControls } from "@zxing/browser";
+import { ScanLine, ShieldCheck } from "lucide-react";
 import { AppShell } from "@/components/bagguard/AppShell";
 import { LookupForm } from "@/components/bagguard/LookupForm";
 import { getCurrentProfile } from "@/lib/data-service";
-
-function isMobileDevice(): boolean {
-  if (typeof navigator === "undefined") return false;
-  return (
-    /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
-    (navigator.maxTouchPoints > 1 && window.matchMedia("(pointer: coarse)").matches)
-  );
-}
 
 export function GateScanScreen() {
   const router = useRouter();
@@ -22,17 +13,6 @@ export function GateScanScreen() {
   const [allowed, setAllowed] = useState(false);
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  // Scanner state
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [cameraError, setCameraError] = useState<string | null>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const controlsRef = useRef<IScannerControls | null>(null);
-  const scanningRef = useRef(false);
-
-  // USN from camera → fed into LookupForm
-  const [scannedUsn, setScannedUsn] = useState<string | null>(null);
 
   // Staff access check
   useEffect(() => {
@@ -53,140 +33,6 @@ export function GateScanScreen() {
       })
       .finally(() => setChecking(false));
   }, [router]);
-
-  // Camera + barcode scanner
-  useEffect(() => {
-    if (!scannerOpen) {
-      if (controlsRef.current) {
-        controlsRef.current.stop();
-        controlsRef.current = null;
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-      }
-      setCameraError(null);
-      scanningRef.current = false;
-      return;
-    }
-
-    let cancelled = false;
-
-    async function startCameraAndScanner() {
-      setCameraError(null);
-      scanningRef.current = false;
-
-      if (!window.isSecureContext) {
-        setCameraError("Camera only works on HTTPS or localhost.");
-        return;
-      }
-
-      if (!navigator.mediaDevices?.getUserMedia) {
-        setCameraError("This browser does not support camera access.");
-        return;
-      }
-
-      const mobile = isMobileDevice();
-
-      const constraintsList: MediaStreamConstraints[] = mobile
-        ? [
-            { video: { facingMode: { exact: "environment" } }, audio: false },
-            { video: { facingMode: "environment" }, audio: false },
-            { video: true, audio: false },
-            { video: { facingMode: "user" }, audio: false },
-          ]
-        : [
-            { video: { facingMode: "user" }, audio: false },
-            { video: true, audio: false },
-            { video: { facingMode: "environment" }, audio: false },
-          ];
-
-      let lastError: unknown = null;
-      let stream: MediaStream | null = null;
-
-      for (const constraints of constraintsList) {
-        try {
-          stream = await navigator.mediaDevices.getUserMedia(constraints);
-          break;
-        } catch (err) {
-          lastError = err;
-        }
-      }
-
-      if (!stream) {
-        let message = "Could not open the camera.";
-        if (lastError instanceof DOMException) {
-          if (lastError.name === "NotAllowedError") {
-            message =
-              "Camera permission was denied. Please allow camera access in the browser address bar and try again.";
-          } else if (lastError.name === "NotFoundError") {
-            message = "No camera was found on this device.";
-          } else {
-            message = `Camera error: ${lastError.message}`;
-          }
-        }
-        setCameraError(message);
-        return;
-      }
-
-      if (cancelled) {
-        stream.getTracks().forEach((t) => t.stop());
-        return;
-      }
-
-      streamRef.current = stream;
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play().catch(() => {});
-      }
-
-      try {
-        const reader = new BrowserMultiFormatReader();
-        const controls = await reader.decodeFromVideoElement(
-          videoRef.current!,
-          (result, _error, controls) => {
-            if (result && !scanningRef.current) {
-              scanningRef.current = true;
-              const text = result.getText().trim();
-              if (text) {
-                controls.stop();
-                controlsRef.current = null;
-                // Close modal and hand USN to LookupForm
-                setScannerOpen(false);
-                setScannedUsn(text);
-              }
-            }
-          }
-        );
-        controlsRef.current = controls;
-      } catch (err) {
-        console.error("Barcode scanner failed to start:", err);
-      }
-    }
-
-    startCameraAndScanner();
-
-    return () => {
-      cancelled = true;
-      if (controlsRef.current) {
-        controlsRef.current.stop();
-        controlsRef.current = null;
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-      }
-    };
-  }, [scannerOpen]);
-
-  // Manual type-in from the scanner modal
-  function handleManualScan(value: string) {
-    const text = value.trim();
-    if (!text) return;
-    setScannerOpen(false);
-    setScannedUsn(text);
-  }
 
   return (
     <AppShell active="/scan" staff>
@@ -211,6 +57,7 @@ export function GateScanScreen() {
               </h1>
               <p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">
                 Confirm the bag’s current status before clearing it through the checkpoint.
+                Scan with the R45 or type the USN — the field clears automatically after each check.
               </p>
             </div>
 
@@ -219,104 +66,8 @@ export function GateScanScreen() {
             </div>
           </div>
 
-          {/* Open Scanner Button */}
-          <div className="mb-6">
-            <button
-              type="button"
-              onClick={() => setScannerOpen(true)}
-              className="inline-flex items-center gap-2 rounded-lg bg-secondary px-4 py-2.5 text-sm font-semibold text-secondary-foreground shadow-sm transition hover:opacity-90"
-            >
-              <Camera size={18} />
-              Open scanner
-            </button>
-          </div>
-
-          {/* Scanner Modal */}
-          {scannerOpen && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-              <div className="relative w-full max-w-md overflow-hidden rounded-xl bg-background shadow-2xl">
-                <div className="flex items-center justify-between border-b px-4 py-3">
-                  <h2 className="text-sm font-semibold">Scan student ID barcode</h2>
-                  <button
-                    type="button"
-                    onClick={() => setScannerOpen(false)}
-                    className="rounded-md p-1 hover:bg-muted"
-                    aria-label="Close scanner"
-                  >
-                    <X size={18} />
-                  </button>
-                </div>
-
-                <div className="relative aspect-[4/3] bg-black">
-                  {cameraError ? (
-                    <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-sm text-white">
-                      <p>{cameraError}</p>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCameraError(null);
-                          setScannerOpen(false);
-                          setTimeout(() => setScannerOpen(true), 80);
-                        }}
-                        className="rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground"
-                      >
-                        Try again
-                      </button>
-                    </div>
-                  ) : (
-                    <>
-                      <video
-                        ref={videoRef}
-                        autoPlay
-                        playsInline
-                        muted
-                        className="h-full w-full object-cover"
-                      />
-                      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                        <div className="h-40 w-64 rounded-lg border-2 border-secondary/80 shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" />
-                      </div>
-                      <div className="pointer-events-none absolute bottom-3 left-0 right-0 text-center text-xs text-white/90">
-                        Align the barcode inside the box
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                <div className="space-y-3 p-4">
-                  <p className="text-center text-xs text-muted-foreground">
-                    Point the camera at the barcode. It will scan automatically.
-                  </p>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      placeholder="Or type barcode / USN manually…"
-                      className="flex-1 rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-secondary"
-                      autoFocus
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          handleManualScan((e.target as HTMLInputElement).value);
-                        }
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className="rounded-md bg-secondary px-3 py-2 text-sm font-medium text-secondary-foreground"
-                      onClick={() => setScannerOpen(false)}
-                    >
-                      Done
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* LookupForm – result appears in the “Ready for verification” panel */}
-          <LookupForm
-            mode="gate"
-            scannedUsn={scannedUsn}
-            onScannedUsnConsumed={() => setScannedUsn(null)}
-          />
+          <LookupForm mode="gate" />
 
           <p className="mt-5 text-center text-[11px] text-muted-foreground">
             Each completed check is recorded with the selected local operator and checkpoint.
