@@ -8,12 +8,15 @@ import {
   CheckCircle2,
   CircleHelp,
   LoaderCircle,
+  Plus,
   RotateCcw,
   Search,
   ShieldAlert,
+  Upload,
+  X,
 } from "lucide-react";
 
-import { lookupBagByUsn, verifyAtGate } from "@/lib/data-service";
+import { lookupBagByUsn, verifyAtGate, addAdditionalBag } from "@/lib/data-service";
 import { StatusBadge } from "@/components/bagguard/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -59,14 +62,35 @@ export function LookupForm({
   const inputRef = useRef<HTMLInputElement>(null);
   const isGate = mode === "gate";
 
+  // Add another bag state
+  const [showAddAnother, setShowAddAnother] = useState(false);
+  const [addMode, setAddMode] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
   async function runCheck(nextUsn: string, nextCheckpoint: string) {
     setLoading(true);
     setResult(null);
+    setShowAddAnother(false);
+    setAddMode(false);
+    setUploadMessage(null);
+    setUploadError(null);
+    setSelectedFile(null);
+    setPreviewUrl(null);
+
     try {
       const next = isGate
         ? await verifyAtGate({ usn: nextUsn, checkpointName: nextCheckpoint })
         : await lookupBagByUsn(nextUsn);
       setResult(next);
+
+      // Show "Add another bag" only on public mode when a registration exists
+      if (!isGate && next.registration) {
+        setShowAddAnother(true);
+      }
     } catch (error) {
       setResult({
         status: "error",
@@ -99,6 +123,13 @@ export function LookupForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scannedUsn]);
 
+  // Clean up object URL
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
+
   async function checkUsn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const value = usn.trim();
@@ -109,13 +140,66 @@ export function LookupForm({
   function clearLookup() {
     setUsn("");
     setResult(null);
+    setShowAddAnother(false);
+    setAddMode(false);
+    setSelectedFile(null);
+    setPreviewUrl(null);
+    setUploadMessage(null);
+    setUploadError(null);
     inputRef.current?.focus();
+  }
+
+  function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] ?? null;
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setSelectedFile(file);
+    setPreviewUrl(file ? URL.createObjectURL(file) : null);
+    setUploadMessage(null);
+    setUploadError(null);
+  }
+
+  async function handleAddBag(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedFile || !result?.registration?.usn) return;
+
+    setUploading(true);
+    setUploadError(null);
+    setUploadMessage(null);
+
+    try {
+      // Convert File → data URL (same format used by registerBag)
+      const imageUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error("Could not read the image file."));
+        reader.readAsDataURL(selectedFile);
+      });
+
+      await addAdditionalBag({
+        usn: result.registration.usn,
+        imageUrl,
+      });
+
+      setUploadMessage("Bag image added successfully. It is now pending approval.");
+      setSelectedFile(null);
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+        setPreviewUrl(null);
+      }
+    } catch (err) {
+      setUploadError(
+        err instanceof Error ? err.message : "Upload failed. Please try again."
+      );
+    } finally {
+      setUploading(false);
+    }
   }
 
   const ResultIcon = result ? iconByStatus[result.status] : null;
 
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+      {/* Left panel – search form */}
       <section className="rounded-xl border border-border bg-card p-5 sm:p-7">
         <div className="mb-6 flex items-center gap-3">
           <span className="grid size-11 place-items-center rounded-lg bg-primary text-primary-foreground">
@@ -208,6 +292,7 @@ export function LookupForm({
         </div>
       </section>
 
+      {/* Right panel – result + add another bag */}
       <section
         aria-live="polite"
         aria-atomic="true"
@@ -215,6 +300,7 @@ export function LookupForm({
       >
         {result && ResultIcon ? (
           <div className="space-y-5">
+            {/* Status panel */}
             <div
               className={`rounded-xl border p-5 ${resultPanelByStatus[result.status]}`}
             >
@@ -236,6 +322,7 @@ export function LookupForm({
               </div>
             </div>
 
+            {/* Registration details */}
             {result.registration ? (
               <div className="rounded-xl border border-border p-5">
                 <p className="mb-4 text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
@@ -267,6 +354,7 @@ export function LookupForm({
                     </dd>
                   </div>
                 </dl>
+
                 {result.registration.imageUrl ? (
                   <div className="mt-5 overflow-hidden rounded-lg border border-border">
                     <Image
@@ -279,8 +367,119 @@ export function LookupForm({
                     />
                   </div>
                 ) : null}
+
+                {/* Add another bag button */}
+                {!isGate && showAddAnother && !addMode && (
+                  <div className="mt-5 border-t border-border pt-5">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="gap-2"
+                      onClick={() => {
+                        setAddMode(true);
+                        setUploadMessage(null);
+                        setUploadError(null);
+                      }}
+                    >
+                      <Plus size={16} />
+                      Add another bag
+                    </Button>
+                  </div>
+                )}
               </div>
             ) : null}
+
+            {/* Add another bag upload form */}
+            {addMode && result.registration && (
+              <div className="rounded-xl border border-border p-5">
+                <div className="mb-4 flex items-center justify-between">
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
+                      Add another bag
+                    </p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Image will be attached to{" "}
+                      <span className="font-mono font-semibold text-foreground">
+                        {result.registration.usn}
+                      </span>
+                      {" "}(max 5 bags)
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => {
+                      setAddMode(false);
+                      setSelectedFile(null);
+                      if (previewUrl) {
+                        URL.revokeObjectURL(previewUrl);
+                        setPreviewUrl(null);
+                      }
+                    }}
+                    aria-label="Cancel add bag"
+                  >
+                    <X size={16} />
+                  </Button>
+                </div>
+
+                <form onSubmit={handleAddBag} className="space-y-4">
+                  <label className="block space-y-2 text-sm font-semibold">
+                    Bag photo
+                    <Input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleFileChange}
+                      required
+                      className="cursor-pointer"
+                    />
+                  </label>
+
+                  {previewUrl && (
+                    <div className="overflow-hidden rounded-lg border border-border">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={previewUrl}
+                        alt="Preview of new bag"
+                        className="max-h-48 w-full object-cover"
+                      />
+                    </div>
+                  )}
+
+                  {selectedFile && (
+                    <p className="text-xs text-muted-foreground">
+                      {selectedFile.name} · {Math.round(selectedFile.size / 1024)} KB
+                    </p>
+                  )}
+
+                  <Button
+                    type="submit"
+                    disabled={!selectedFile || uploading}
+                    className="gap-2"
+                  >
+                    {uploading ? (
+                      <LoaderCircle className="animate-spin" size={16} />
+                    ) : (
+                      <Upload size={16} />
+                    )}
+                    {uploading ? "Uploading…" : "Upload bag image"}
+                  </Button>
+
+                  {uploadMessage && (
+                    <p className="flex items-center gap-2 text-sm text-chart-2">
+                      <CheckCircle2 size={16} />
+                      {uploadMessage}
+                    </p>
+                  )}
+                  {uploadError && (
+                    <p className="flex items-center gap-2 text-sm text-destructive">
+                      <AlertTriangle size={16} />
+                      {uploadError}
+                    </p>
+                  )}
+                </form>
+              </div>
+            )}
           </div>
         ) : (
           <div className="flex min-h-[270px] flex-col items-center justify-center text-center">

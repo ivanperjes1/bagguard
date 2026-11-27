@@ -3,6 +3,7 @@ import {
   ArrowUpRight,
   ClipboardList,
   Home,
+  PlusCircle,
   ScanLine,
   SearchCheck,
   Shield,
@@ -11,7 +12,7 @@ import {
 const navigation = [
   { href: "/", label: "Home", icon: Home },
   { href: "/register", label: "Register bag", icon: ClipboardList },
-  { href: "/bagtracker", label: "BagTracker", icon: SearchCheck },
+  { href: "/bagtracker", label: "Add More Bags", icon: PlusCircle },
   { href: "/scan", label: "Gate scan", icon: ScanLine },
   { href: "/report", label: "Reports", icon: ClipboardList },
 ];

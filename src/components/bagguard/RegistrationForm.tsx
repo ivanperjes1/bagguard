@@ -333,7 +333,7 @@ export function RegistrationForm({
         <label htmlFor="bag-photo" className="block text-sm font-semibold">
           Bag photo{" "}
           <span className="font-normal text-muted-foreground">
-            (optional)
+            (Required)
           </span>
         </label>
 

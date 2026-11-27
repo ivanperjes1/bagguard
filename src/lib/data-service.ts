@@ -233,7 +233,7 @@ async function addAdminAction(
 }
 
 // ---------------------------------------------------------------------------
-// Public API (identical signatures to the localStorage version)
+// Public API
 // ---------------------------------------------------------------------------
 
 export async function getCurrentProfile(): Promise<StaffRecord | null> {
@@ -383,16 +383,15 @@ export async function registerBag(input: RegisterBagInput): Promise<{ id: string
 
   const supabase = getSupabase();
 
-  // Prevent duplicate active registrations for the same USN
-  const { data: existing } = await supabase
+  // Allow up to 5 non-archived bags per USN
+  const { count } = await supabase
     .from('bag_registrations')
-    .select('id')
+    .select('*', { count: 'exact', head: true })
     .eq('usn', usn)
-    .neq('status', 'archived')
-    .limit(1);
+    .neq('status', 'archived');
 
-  if (existing && existing.length > 0) {
-    throw new Error('This student number already has a registration. Contact campus staff if the bag needs to change.');
+  if ((count ?? 0) >= 5) {
+    throw new Error('This student number already has the maximum of 5 bags registered.');
   }
 
   const { data, error } = await supabase
@@ -401,6 +400,75 @@ export async function registerBag(input: RegisterBagInput): Promise<{ id: string
       student_name: studentName,
       usn,
       department: input.department,
+      bag_description: bagDescription,
+      image_url: input.imageUrl,
+      status: 'pending',
+    })
+    .select('id')
+    .single();
+
+  if (error) throw new Error(error.message);
+  return { id: data.id };
+}
+
+/**
+ * Add another bag (new image) for an existing USN.
+ * Maximum 5 non-archived bags per USN.
+ */
+export async function addAdditionalBag(input: {
+  usn: string;
+  imageUrl: string; // data:image/... base64
+  bagDescription?: string;
+}): Promise<{ id: string }> {
+  const usn = normalizeUsn(input.usn);
+
+  if (
+    !input.imageUrl ||
+    !input.imageUrl.startsWith('data:image/') ||
+    input.imageUrl.length > 1_000_000
+  ) {
+    throw new Error('The bag photo is too large or invalid. Choose a smaller image.');
+  }
+
+  const supabase = getSupabase();
+
+  // Count existing non-archived bags for this USN
+  const { count, error: countError } = await supabase
+    .from('bag_registrations')
+    .select('*', { count: 'exact', head: true })
+    .eq('usn', usn)
+    .neq('status', 'archived');
+
+  if (countError) throw new Error(countError.message);
+
+  if ((count ?? 0) >= 5) {
+    throw new Error('This student already has the maximum of 5 bags registered.');
+  }
+
+  // Get the most recent registration so we can copy student details
+  const { data: latest, error: fetchError } = await supabase
+    .from('bag_registrations')
+    .select('*')
+    .eq('usn', usn)
+    .neq('status', 'archived')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (fetchError) throw new Error(fetchError.message);
+  if (!latest) {
+    throw new Error('No existing registration found for this USN. Register the first bag first.');
+  }
+
+  const bagDescription =
+    (input.bagDescription?.trim() || latest.bag_description || 'Additional bag').slice(0, 500);
+
+  const { data, error } = await supabase
+    .from('bag_registrations')
+    .insert({
+      student_name: latest.student_name,
+      usn,
+      department: latest.department,
       bag_description: bagDescription,
       image_url: input.imageUrl,
       status: 'pending',

@@ -32,7 +32,7 @@ const actions = [
   {
     href: "/bagtracker",
     number: "02",
-    label: "BagTracker",
+    label: "Add Bags",
     description:
       "Check the current registration decision using a student identification number.",
     icon: SearchCheck,

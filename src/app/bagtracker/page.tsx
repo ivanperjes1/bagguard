@@ -20,7 +20,7 @@ export default function BagTrackerPage() {
         <div className="mb-7 mt-5 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
             <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-secondary">Student services · 02</p>
-            <h1 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">BagTracker</h1>
+            <h1 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">Add Bag</h1>
             <p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">Check whether a bag registration is approved, pending, or no longer active.</p>
           </div>
           <div className="inline-flex items-center gap-2 self-start rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold text-muted-foreground sm:self-auto">
